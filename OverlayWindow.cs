@@ -17,31 +17,12 @@ namespace ActiveBorder;
  */
 internal sealed class OverlayWindow : IDisposable
 {
-	// 0xAARRGGBB, alpha-premultiplied. Alpha is 0xFF so the premultiplied
-	// channels equal the straight ones.
-	//
-	// Internal rather than private because the tray icon paints itself in the
-	// same colour: one constant, so the icon and the border cannot drift
-	// apart from each other.
-	internal const uint BORDER_COLOR_ARGB = 0xFFFF0000;
-
-	// The other half of the hazard pattern. Both colours are fully opaque,
-	// the case where premultiplied and straight alpha agree, so the blend
-	// needs no premultiply maths.
-	private const uint STRIPE_COLOR_ARGB = 0xFFFFFFFF;
-
 	/**
-	 * Length of one red plus one white band measured along an edge, in
-	 * physical pixels. The bands run at 45 degrees, so the width you actually
-	 * see across a band is about 0.35 of this.
+	 * Length of one first-colour plus one second-colour band measured along
+	 * an edge, in physical pixels. The bands run at 45 degrees, so the width
+	 * you actually see across a band is about 0.35 of this.
 	 */
 	private const int STRIPE_PERIOD = 12;
-
-	/**
-     * Border width in physical pixels. The process is per-monitor DPI aware,
-     * so this is not scaled by the system.
-     */
-	internal const int THICKNESS = 5;
 
 	private const string CLASS_NAME = "ActiveBorderOverlay";
 
@@ -111,7 +92,7 @@ internal sealed class OverlayWindow : IDisposable
 	{
 		// A window narrower or shorter than two borders has nowhere sensible
 		// to put a rectangle.
-		if (bounds.Width < THICKNESS * 2 || bounds.Height < THICKNESS * 2)
+		if (bounds.Width < Settings.Width * 2 || bounds.Height < Settings.Width * 2)
 		{
 			Hide();
 			return;
@@ -121,10 +102,10 @@ internal sealed class OverlayWindow : IDisposable
 		// outside it. Outside would fall off the screen (or under the
 		// taskbar) for maximized and snapped windows, which is exactly where
 		// a focus indicator is most needed.
-		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + THICKNESS);
-		var bottom = Rect(bounds.Left, bounds.Bottom - THICKNESS, bounds.Right, bounds.Bottom);
-		var left = Rect(bounds.Left, bounds.Top + THICKNESS, bounds.Left + THICKNESS, bounds.Bottom - THICKNESS);
-		var right = Rect(bounds.Right - THICKNESS, bounds.Top + THICKNESS, bounds.Right, bounds.Bottom - THICKNESS);
+		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + Settings.Width);
+		var bottom = Rect(bounds.Left, bounds.Bottom - Settings.Width, bounds.Right, bounds.Bottom);
+		var left = Rect(bounds.Left, bounds.Top + Settings.Width, bounds.Left + Settings.Width, bounds.Bottom - Settings.Width);
+		var right = Rect(bounds.Right - Settings.Width, bounds.Top + Settings.Width, bounds.Right, bounds.Bottom - Settings.Width);
 
 		_bounds = bounds;
 
@@ -207,8 +188,8 @@ internal sealed class OverlayWindow : IDisposable
 
 		// Guard against a window somehow larger than the bitmaps we sized to
 		// the virtual screen; clamping is better than a failed draw.
-		var width = Math.Min(rect.Width, horizontal ? _stripLength : THICKNESS);
-		var height = Math.Min(rect.Height, horizontal ? THICKNESS : _stripLength);
+		var width = Math.Min(rect.Width, horizontal ? _stripLength : Settings.Width);
+		var height = Math.Min(rect.Height, horizontal ? Settings.Width : _stripLength);
 		if (width <= 0 || height <= 0)
 			return;
 
@@ -354,11 +335,11 @@ internal sealed class OverlayWindow : IDisposable
 		_horizontalDc = CreateCompatibleDC(IntPtr.Zero);
 		// The extra period is headroom for the phase offset that anchors the
 		// pattern to screen coordinates; see UpdateEdge.
-		_horizontalBitmap = CreateStripeDib(_stripLength + STRIPE_PERIOD, THICKNESS);
+		_horizontalBitmap = CreateStripeDib(_stripLength + STRIPE_PERIOD, Settings.Width);
 		_horizontalOldBitmap = SelectObject(_horizontalDc, _horizontalBitmap);
 
 		_verticalDc = CreateCompatibleDC(IntPtr.Zero);
-		_verticalBitmap = CreateStripeDib(THICKNESS, _stripLength + STRIPE_PERIOD);
+		_verticalBitmap = CreateStripeDib(Settings.Width, _stripLength + STRIPE_PERIOD);
 		_verticalOldBitmap = SelectObject(_verticalDc, _verticalBitmap);
 	}
 
@@ -382,15 +363,15 @@ internal sealed class OverlayWindow : IDisposable
 
 		var pixelCount = width * height;
 		var pixels = new int[pixelCount];
-		var red = unchecked((int)BORDER_COLOR_ARGB);
-		var white = unchecked((int)STRIPE_COLOR_ARGB);
+		var first = unchecked((int)Settings.Color1);
+		var second = unchecked((int)Settings.Color2);
 
 		// Pixels sharing a value of x + y lie on a 45 degree line, so
 		// thresholding that sum inside one period gives diagonal bands
 		// leaning the way a forward slash does.
 		for (var y = 0; y < height; y++)
 			for (var x = 0; x < width; x++)
-				pixels[(y * width) + x] = (x + y) % STRIPE_PERIOD < STRIPE_PERIOD / 2 ? red : white;
+				pixels[(y * width) + x] = (x + y) % STRIPE_PERIOD < STRIPE_PERIOD / 2 ? first : second;
 
 		Marshal.Copy(pixels, 0, bits, pixelCount);
 

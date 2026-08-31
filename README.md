@@ -103,34 +103,62 @@ Not built in, deliberately. If you want it, put a shortcut to
 
 ## Changing the colour or thickness
 
-Both are compile-time constants at the top of
-[`OverlayWindow.cs`](OverlayWindow.cs). Edit and rebuild:
+Three environment variables, read once when the utility starts. No rebuild,
+no settings file:
 
-```csharp
-internal const uint BORDER_COLOR_ARGB = 0xFFFF0000;   // red   #FF0000
-private  const uint STRIPE_COLOR_ARGB = 0xFFFFFFFF;   // white #FFFFFF
-private  const int  STRIPE_PERIOD     = 12;           // one red + one white band
-internal const int  THICKNESS         = 5;            // physical pixels
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `AB_COLOR_1` | first stripe colour, `RRGGBB` | `FF0000` red |
+| `AB_COLOR2` | second stripe colour, `RRGGBB` | `FFFFFF` white |
+| `AB_WIDTH` | border thickness in physical pixels, 1 to 64 | `5` |
+
+```powershell
+$env:AB_COLOR_1 = "00A0FF"
+$env:AB_COLOR2  = "202020"
+$env:AB_WIDTH   = "9"
+.\bin\Release\net8.0-windows\ActiveBorder.exe
 ```
 
-`BORDER_COLOR_ARGB` is `0xAARRGGBB` and alpha-premultiplied. At full opacity
-(`0xFF`) the premultiplied channels equal the straight ones, so a plain alpha
-plus RGB value is correct as written. At partial alpha you have to scale the
-colour channels down to match, or the blend comes out wrong.
+To make them stick, set them for your account once and they apply to every
+later run:
 
-`STRIPE_PERIOD` is the length of one red plus one white band measured along
-an edge. The bands run at 45 degrees, so the width you actually see across a
-band is about 0.35 of it. The pattern is anchored to screen coordinates
-rather than to each strip, so the diagonals run continuously around all four
-corners instead of restarting at each one.
+```powershell
+[Environment]::SetEnvironmentVariable("AB_COLOR_1", "00A0FF", "User")
+```
 
-At the default 5 px thickness the stripe reads as a fine diagonal hatch. If
-you want it to look more like real hazard tape, raise `THICKNESS` to 10-12.
+A leading `#` is accepted, so `#00A0FF` works as well as `00A0FF`.
 
-The tray icon reads the border colour constant, so it always matches.
+**Anything missing, malformed or out of range falls back to its default**
+rather than failing. A tray utility with no console has nowhere to report a
+bad value, and refusing to start over one typo would be worse than ignoring
+it. `AB_WIDTH=wide`, `AB_WIDTH=999` and `AB_COLOR_1=nothex` all just leave
+that one setting at its default; the others still apply.
 
-`THICKNESS` is in *physical* pixels. The process is per-monitor-v2 DPI aware,
-so the system does not scale it: 5 means 5 real pixels on every monitor.
+The values are fixed for the lifetime of the process: the strip bitmaps are
+rendered once at start-up, so a change takes effect the next time you run it.
+
+The tray icon uses `AB_COLOR_1`, so it always matches the border.
+
+`AB_WIDTH` is in *physical* pixels. The process is per-monitor-v2 DPI aware,
+so the system does not scale it: 5 means 5 real pixels on every monitor. The
+upper limit of 64 exists because the strips are as long as the virtual
+screen, so their bitmaps grow with the thickness.
+
+At the default 5 px the stripe reads as a fine diagonal hatch. For something
+closer to real hazard tape, try `AB_WIDTH=12`.
+
+One thing that is still a compile-time constant, in
+[`OverlayWindow.cs`](OverlayWindow.cs):
+
+```csharp
+private const int STRIPE_PERIOD = 12;   // one first-colour + one second-colour band
+```
+
+It is the length of one full band pair measured along an edge. The bands run
+at 45 degrees, so the width you see across a band is about 0.35 of it. The
+pattern is anchored to screen coordinates rather than to each strip, so the
+diagonals run continuously around all four corners instead of restarting at
+each one.
 
 ## Tested against
 
@@ -180,8 +208,8 @@ verified - see **[DESIGN.md](DESIGN.md)**.
 ## Project layout
 
 ```
-*.cs              the utility (6 source files, no dependencies)
-tests/            7 PowerShell verification suites
+*.cs              the utility (7 source files, no dependencies)
+tests/            8 PowerShell verification suites
 DESIGN.md         implementation notes and verification results
 ```
 
@@ -190,8 +218,9 @@ framework - just Win32, GDI and DWM through P/Invoke.
 
 ## Tests
 
-Seven PowerShell suites cover geometry, colour, click-through, z-order, CPU,
-the tray icon, and attaching to newly created windows. Build first, then:
+Eight PowerShell suites cover geometry, colour, click-through, z-order, CPU,
+the tray icon, attaching to newly created windows, and the environment
+overrides. Build first, then:
 
 ```
 pwsh -NoProfile -File tests\01-geometry.ps1

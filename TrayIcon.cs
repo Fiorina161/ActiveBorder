@@ -189,7 +189,7 @@ internal sealed class TrayIcon : IDisposable
 			for (var x = 0; x < width; x++)
 			{
 				var onRing = x < ring || y < ring || x >= width - ring || y >= height - ring;
-				pixels[y * width + x] = onRing ? unchecked((int)OverlayWindow.BORDER_COLOR_ARGB) : 0;
+				pixels[y * width + x] = onRing ? unchecked((int)Settings.Color1) : 0;
 			}
 		Marshal.Copy(pixels, 0, bits, pixels.Length);
 

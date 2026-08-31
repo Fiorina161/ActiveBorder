@@ -127,6 +127,13 @@ function Check($n, $c, $d) {
 }
 
 $exe = (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe')
+# Pin the appearance so this suite is deterministic even on a machine that
+# has the AB_* overrides set in the environment.
+foreach ($n in 'AB_COLOR_1', 'AB_COLOR2', 'AB_WIDTH')
+{
+    Remove-Item "Env:$n" -ErrorAction SilentlyContinue
+}
+
 Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Start-Sleep -Milliseconds 500
 

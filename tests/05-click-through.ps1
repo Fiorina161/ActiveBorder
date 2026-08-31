@@ -41,6 +41,13 @@ public static class W7 {
 $failures = 0
 function Check($n,$c,$d){ if($c){Write-Host ("  PASS  "+$n) -ForegroundColor Green} else {Write-Host ("  FAIL  "+$n+"  "+$d) -ForegroundColor Red; $script:failures++} }
 
+# Pin the appearance so this suite is deterministic even on a machine that
+# has the AB_* overrides set in the environment.
+foreach ($n in 'AB_COLOR_1', 'AB_COLOR2', 'AB_WIDTH')
+{
+    Remove-Item "Env:$n" -ErrorAction SilentlyContinue
+}
+
 Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Start-Sleep -Milliseconds 400
 $app = Start-Process (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe') -PassThru -WindowStyle Minimized
