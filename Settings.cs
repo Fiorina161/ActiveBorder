@@ -6,7 +6,7 @@ namespace ActiveBorder;
  * Appearance, read once from the environment when the process starts.
  *
  *   AB_COLOR_1   first stripe colour, RRGGBB hex   default FF0000 (red)
- *   AB_COLOR2    second stripe colour, RRGGBB hex  default FFFFFF (white)
+ *   AB_COLOR_2    second stripe colour, RRGGBB hex  default FFFFFF (white)
  *   AB_WIDTH     border thickness in physical px   default 5, range 1..64
  *
  * Anything missing, malformed or out of range silently falls back to its
@@ -32,7 +32,7 @@ internal static class Settings
 	internal const int MAX_WIDTH = 64;
 
 	internal static readonly uint Color1 = ReadColor("AB_COLOR_1", DEFAULT_COLOR_1);
-	internal static readonly uint Color2 = ReadColor("AB_COLOR2", DEFAULT_COLOR_2);
+	internal static readonly uint Color2 = ReadColor("AB_COLOR_2", DEFAULT_COLOR_2);
 	internal static readonly int Width = ReadWidth("AB_WIDTH", DEFAULT_WIDTH);
 
 	/**

@@ -109,12 +109,12 @@ no settings file:
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `AB_COLOR_1` | first stripe colour, `RRGGBB` | `FF0000` red |
-| `AB_COLOR2` | second stripe colour, `RRGGBB` | `FFFFFF` white |
+| `AB_COLOR_2` | second stripe colour, `RRGGBB` | `FFFFFF` white |
 | `AB_WIDTH` | border thickness in physical pixels, 1 to 64 | `5` |
 
 ```powershell
 $env:AB_COLOR_1 = "00A0FF"
-$env:AB_COLOR2  = "202020"
+$env:AB_COLOR_2  = "202020"
 $env:AB_WIDTH   = "9"
 .\bin\Release\net8.0-windows\ActiveBorder.exe
 ```

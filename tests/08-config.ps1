@@ -1,4 +1,4 @@
-# Verifies the AB_COLOR_1 / AB_COLOR2 / AB_WIDTH environment overrides, and
+# Verifies the AB_COLOR_1 / AB_COLOR_2 / AB_WIDTH environment overrides, and
 # that anything missing, malformed or out of range falls back to the default.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -52,11 +52,11 @@ $exe = (Join-Path $PSScriptRoot '..\bin\Release\net8.0-windows\ActiveBorder.exe'
 $PERIOD = 12
 
 function Set-Env($c1, $c2, $wd) {
-    foreach ($n in 'AB_COLOR_1', 'AB_COLOR2', 'AB_WIDTH') {
+    foreach ($n in 'AB_COLOR_1', 'AB_COLOR_2', 'AB_WIDTH') {
         Remove-Item "Env:$n" -ErrorAction SilentlyContinue
     }
     if ($null -ne $c1) { $env:AB_COLOR_1 = $c1 }
-    if ($null -ne $c2) { $env:AB_COLOR2 = $c2 }
+    if ($null -ne $c2) { $env:AB_COLOR_2 = $c2 }
     if ($null -ne $wd) { $env:AB_WIDTH = $wd }
 }
 
@@ -64,7 +64,7 @@ function Set-Env($c1, $c2, $wd) {
 function Run-Case($label, $c1, $c2, $wd, $wantRgb1, $wantRgb2, $wantWidth) {
     Write-Host ""
     Write-Host ("== " + $label) -ForegroundColor Cyan
-    Write-Host ("   AB_COLOR_1='$c1' AB_COLOR2='$c2' AB_WIDTH='$wd'  ->  expect $wantRgb1 / $wantRgb2 at ${wantWidth}px")
+    Write-Host ("   AB_COLOR_1='$c1' AB_COLOR_2='$c2' AB_WIDTH='$wd'  ->  expect $wantRgb1 / $wantRgb2 at ${wantWidth}px")
 
     Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
     Start-Sleep -Milliseconds 500
