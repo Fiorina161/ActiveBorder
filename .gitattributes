@@ -1,0 +1,5 @@
+# Normalise line endings in the repository and check out native ones, so the
+# sources stop drifting between CRLF and LF as different editors save them.
+* text=auto
+
+*.png binary
