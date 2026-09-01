@@ -25,8 +25,12 @@ internal sealed class TrayIcon : IDisposable
 	private readonly WndProc _wndProc;
 
 	private readonly IntPtr _window;
-	private readonly IntPtr _icon;
 	private readonly IntPtr _menu;
+
+	// The icon is redrawn whenever the accent colour changes, so neither it
+	// nor the colour it was drawn in is readonly.
+	private IntPtr _icon;
+	private uint _iconColor;
 
 	/**
      * Broadcast by the shell when Explorer restarts. Every notification-area
@@ -67,7 +71,8 @@ internal sealed class TrayIcon : IDisposable
 
 		_taskbarCreated = RegisterWindowMessageW("TaskbarCreated");
 
-		_icon = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+		_iconColor = AccentColor.Current;
+		_icon = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), _iconColor);
 
 		_menu = CreatePopupMenu();
 
@@ -90,6 +95,49 @@ internal sealed class TrayIcon : IDisposable
 
 		_iconAdded = Shell_NotifyIconW(NIM_ADD, ref data);
 		return _iconAdded;
+	}
+
+	/**
+     * Redraw the icon in the current accent colour so it keeps matching the
+     * border on screen. A no-op unless the colour has actually moved, which
+     * is what makes it safe to call on every colour notification Windows
+     * sends - and it sends several for one trip through the colour picker.
+     */
+	internal void RefreshIcon()
+	{
+		if (_disposed || AccentColor.Current == _iconColor)
+			return;
+
+		IntPtr replacement;
+		try
+		{
+			replacement = CreateBorderIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), AccentColor.Current);
+		}
+		catch (InvalidOperationException)
+		{
+			// GDI is out of handles, or the shell is in a bad way. Keeping the
+			// icon we already have is strictly better than taking the process
+			// down from inside a window procedure.
+			return;
+		}
+
+		var previous = _icon;
+		_icon = replacement;
+		_iconColor = AccentColor.Current;
+
+		if (_iconAdded)
+		{
+			var data = NewIconData();
+			data.UFlags = NIF_ICON;
+			data.HIcon = _icon;
+			Shell_NotifyIconW(NIM_MODIFY, ref data);
+		}
+
+		// Only after the shell has been handed the replacement: destroying an
+		// icon it is still displaying leaves a blank slot in the notification
+		// area until something repaints it.
+		if (previous != IntPtr.Zero)
+			DestroyIcon(previous);
 	}
 
 	private NOTIFYICONDATAW NewIconData() => new()
@@ -160,7 +208,7 @@ internal sealed class TrayIcon : IDisposable
      * the utility draws on screen. Generating it avoids shipping a binary .ico
      * alongside a project whose whole point is minimalism.
      */
-	private static IntPtr CreateBorderIcon(int width, int height)
+	private static IntPtr CreateBorderIcon(int width, int height, uint color)
 	{
 		var ring = Math.Max(2, Math.Min(width, height) / 6);
 
@@ -189,7 +237,7 @@ internal sealed class TrayIcon : IDisposable
 			for (var x = 0; x < width; x++)
 			{
 				var onRing = x < ring || y < ring || x >= width - ring || y >= height - ring;
-				pixels[y * width + x] = onRing ? unchecked((int)Settings.Color1) : 0;
+				pixels[y * width + x] = onRing ? unchecked((int)color) : 0;
 			}
 		Marshal.Copy(pixels, 0, bits, pixels.Length);
 

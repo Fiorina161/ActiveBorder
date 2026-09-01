@@ -17,6 +17,11 @@ internal static class Program
 			using var tracker = new FocusTracker();
 			using var tray = new TrayIcon();
 
+			// The tracker is where the accent colour is watched, because it
+			// owns the only timer in the process; the tray icon follows it so
+			// the icon and the border are always the same colour.
+			tracker.AccentColorChanged += tray.RefreshIcon;
+
 			return RunMessageLoop();
 		}
 		catch (Exception ex)

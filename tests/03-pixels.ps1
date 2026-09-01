@@ -1,14 +1,19 @@
+# Verifies the pixels that actually reach the screen: a solid 5 px border in
+# the Windows accent colour on all four edges, an untouched interior, and no
+# border left behind on a window that loses focus.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
-using System;using System.Text;using System.Runtime.InteropServices;
+using System;using System.Text;using System.Collections.Generic;using System.Runtime.InteropServices;
 public static class W4 {
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h,StringBuilder s,int n);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h,StringBuilder s,int n);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a,uint b,bool at);
@@ -19,6 +24,10 @@ public static class W4 {
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h,int a,out RECT v,int s);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B;
     public override string ToString(){return L+","+T+" "+(R-L)+"x"+(B-T);} }
+  public static string ClassOf(IntPtr h){var sb=new StringBuilder(256);GetClassNameW(h,sb,sb.Capacity);return sb.ToString();}
+  public static List<RECT> Strips(){var l=new List<RECT>();
+    EnumWindows((h,x)=>{ if(ClassOf(h)=="ActiveBorderOverlay" && IsWindowVisible(h)){RECT r;GetWindowRect(h,out r);l.Add(r);} return true;},IntPtr.Zero);
+    return l;}
   public static IntPtr ByTitle(string t){IntPtr res=IntPtr.Zero;
     EnumWindows((h,l)=>{var sb=new StringBuilder(512);GetWindowTextW(h,sb,sb.Capacity);
       if(sb.ToString()==t&&IsWindowVisible(h)){res=h;return false;}return true;},IntPtr.Zero);return res;}
@@ -38,12 +47,17 @@ function Check($n, $c, $d) {
     else { Write-Host ("  FAIL  " + $n + "  " + $d) -ForegroundColor Red; $script:failures++ }
 }
 
-# Pin the appearance so this suite is deterministic even on a machine that
-# has the AB_* overrides set in the environment.
-foreach ($n in 'AB_COLOR_1', 'AB_COLOR_2', 'AB_WIDTH')
-{
-    Remove-Item "Env:$n" -ErrorAction SilentlyContinue
+# The border is whatever the personalisation accent currently is, so the
+# expected colour has to come from where the utility reads it:
+# HKCU\...\Explorer\Accent\AccentColorMenu, stored as 0xAABBGGRR.
+function Get-AccentRgb {
+    $raw = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent' -Name AccentColorMenu).AccentColorMenu
+    $b = [BitConverter]::GetBytes([uint32]($raw -band 0xFFFFFFFFL))
+    return "" + $b[0] + "," + $b[1] + "," + $b[2]
 }
+
+$Accent = Get-AccentRgb
+Write-Host ("accent colour (R,G,B): " + $Accent) -ForegroundColor Cyan
 
 Get-Process ActiveBorder -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Start-Sleep -Milliseconds 400
@@ -67,23 +81,11 @@ $g.Dispose()
 $bmp.Save("$PSScriptRoot\capture.png", [System.Drawing.Imaging.ImageFormat]::Png)
 
 function Px($x, $y) { $c = $bmp.GetPixel($x, $y); return ("" + $c.R + "," + $c.G + "," + $c.B) }
-# The border is a 45-degree red/white hazard pattern, anchored to screen
-# coordinates so the diagonals run continuously around all four edges.
+
 # $Thickness deliberately avoids the name $T: PowerShell variables are
 # case-insensitive, and $t already holds the window handle.
 $Thickness = 5
-$Period    = 12
-$Red       = '255,0,0'
-$White     = '255,255,255'
-
-function Expected([int]$sx, [int]$sy) {
-    $band = ((($sx + $sy) % $Period) + $Period) % $Period
-    if ($band -lt ($Period / 2)) { return $Red }
-    return $White
-}
-
-$script:redSeen = 0
-$script:whiteSeen = 0
+$span = 24
 
 function CheckEdge($name, [int]$x0, [int]$y0, [int]$cols, [int]$rows) {
     $bad = 0
@@ -93,49 +95,46 @@ function CheckEdge($name, [int]$x0, [int]$y0, [int]$cols, [int]$rows) {
             $x = $x0 + $dx
             $y = $y0 + $dy
             $got = Px $x $y
-            $want = Expected ($f.L + $x) ($f.T + $y)
-            if ($got -eq $Red)   { $script:redSeen++ }
-            if ($got -eq $White) { $script:whiteSeen++ }
-            if ($got -ne $want) {
+            if ($got -ne $Accent) {
                 $bad++
-                if (-not $first) { $first = "first mismatch at frame($x,$y): got $got want $want" }
+                if (-not $first) { $first = "first mismatch at frame($x,$y): got $got want $Accent" }
             }
         }
     }
-    Check "$name matches the hazard pattern ($cols x $rows px)" ($bad -eq 0) $first
+    Check "$name is solid accent ($cols x $rows px)" ($bad -eq 0) $first
 }
 
 $midX = [int]($w / 2)
 $midY = [int]($ht / 2)
-$span = $Period * 2
 
-Write-Host "top edge, rows 0..$($Thickness-1) from x=$midX (R=red W=white .=other):"
+Write-Host "top edge, rows 0..$($Thickness-1) from x=$midX (A=accent .=other):"
 for ($y = 0; $y -lt $Thickness; $y++) {
     $row = ''
     for ($x = $midX; $x -lt $midX + $span; $x++) {
-        $c = Px $x $y
-        $row += $(if ($c -eq $Red) { 'R' } elseif ($c -eq $White) { 'W' } else { '.' })
+        $row += $(if ((Px $x $y) -eq $Accent) { 'A' } else { '.' })
     }
     Write-Host ("   y=$y  $row")
 }
 
-CheckEdge "top edge"    $midX 0                       $span      $Thickness
-CheckEdge "bottom edge" $midX ($ht - $Thickness)      $span      $Thickness
-CheckEdge "left edge"   0     $midY                   $Thickness $span
-CheckEdge "right edge"  ($w - $Thickness) $midY       $Thickness $span
+CheckEdge "top edge"    $midX 0                  $span      $Thickness
+CheckEdge "bottom edge" $midX ($ht - $Thickness) $span      $Thickness
+CheckEdge "left edge"   0     $midY              $Thickness $span
+CheckEdge "right edge"  ($w - $Thickness) $midY  $Thickness $span
 
-Check "both colours are actually present" (($script:redSeen -gt 0) -and ($script:whiteSeen -gt 0)) `
-      ("red=$($script:redSeen) white=$($script:whiteSeen)")
+# Thickness comes from the strip windows rather than from the pixel one past
+# the border. With "show accent colour on title bars" switched on, that pixel
+# is legitimately allowed to be the accent colour as well, so it cannot tell
+# border from title bar - whereas a strip window is exactly as thick as the
+# border it paints, and UpdateLayeredWindow cannot paint outside it.
+$strips = [W4]::Strips()
+Check "four strips are visible" ($strips.Count -eq 4) ("found " + $strips.Count)
 
-# One pixel past the border must belong to the application, proving the
-# border is exactly $Thickness px and not merely at least that.
-function NotBorder($c) { return ($c -ne $Red) -and ($c -ne $White) }
+$top = $strips | Where-Object { $_.L -eq $f.L -and $_.T -eq $f.T -and $_.R -eq $f.R }
+$left = $strips | Where-Object { $_.L -eq $f.L -and $_.T -eq ($f.T + $Thickness) }
+Check "top strip is exactly $Thickness px tall"  ($top -and ($top.B - $top.T) -eq $Thickness)    ("measured " + $(if ($top) { $top.B - $top.T } else { 'no strip' }))
+Check "left strip is exactly $Thickness px wide" ($left -and ($left.R - $left.L) -eq $Thickness) ("measured " + $(if ($left) { $left.R - $left.L } else { 'no strip' }))
 
-Check "top row $Thickness is NOT border"          (NotBorder (Px $midX $Thickness))              (Px $midX $Thickness)
-Check "left col $Thickness is NOT border"         (NotBorder (Px $Thickness $midY))              (Px $Thickness $midY)
-Check "bottom row -$($Thickness+1) is NOT border" (NotBorder (Px $midX ($ht-1-$Thickness)))      (Px $midX ($ht-1-$Thickness))
-Check "right col -$($Thickness+1) is NOT border"  (NotBorder (Px ($w-1-$Thickness) $midY))       (Px ($w-1-$Thickness) $midY)
-Check "interior is untouched"                     (NotBorder (Px $midX $midY))                   (Px $midX $midY)
+Check "interior is untouched" ((Px $midX $midY) -ne $Accent) (Px $midX $midY)
 
 $bmp.Dispose()
 
@@ -153,18 +152,14 @@ $g2 = [System.Drawing.Graphics]::FromImage($bmp2)
 $g2.CopyFromScreen($f.L, $f.T, 0, 0, (New-Object System.Drawing.Size($w, $ht)))
 $g2.Dispose()
 $bmp2.Save("$PSScriptRoot\capture-unfocused.png", [System.Drawing.Imaging.ImageFormat]::Png)
-function Px2($x, $y) { $c = $bmp2.GetPixel($x, $y); return ("" + $c.R + "," + $c.G + "," + $c.B) }
-# A single pixel cannot tell "border" from "application": the unfocused
-# title bar is pure white, which is half the hazard pattern. Red is the
-# discriminator - the pattern always carries red bands, a title bar does not.
-$redAfter = 0
-for ($y = 0; $y -lt $Thickness; $y++) {
-    for ($x = $midX; $x -lt $midX + $span; $x++) {
-        if ((Px2 $x $y) -eq $Red) { $redAfter++ }
-    }
-}
-Check "old window has no border once unfocused" ($redAfter -eq 0) "$redAfter red pixels still on its top edge"
 $bmp2.Dispose()
+
+# The strips themselves are the witness here rather than a pixel: an
+# unfocused window's own chrome may or may not be accent-tinted, so counting
+# accent pixels along its top edge would be reading the title bar.
+$stripsAfter = [W4]::Strips()
+$stillOnOld = $stripsAfter | Where-Object { $_.L -eq $f.L -and $_.T -eq $f.T }
+Check "old window has no border once unfocused" (-not $stillOnOld) "a strip is still sitting on its frame"
 
 [void][W4]::PostMessageW($t,  0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
 [void][W4]::PostMessageW($t2, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)

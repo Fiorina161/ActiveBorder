@@ -14,6 +14,7 @@ actually been verified. For what the utility is and how to run it, see
 | `OverlayWindow.cs` | The four border strips: creation, drawing, z-order |
 | `WindowBounds.cs` | Which windows qualify, and where their visible edge is |
 | `TrayIcon.cs` | The notification-area icon, its menu, and shutdown |
+| `AccentColor.cs` | Reading the personalisation accent colour |
 
 No dependencies beyond the .NET base class library.
 
@@ -87,6 +88,26 @@ bearing rather than decorative: no message loop, no callbacks.
   opaque and its interior fully transparent, the two cases where
   premultiplied and straight alpha agree, so no premultiplication is needed.
 
+### The accent colour
+
+- **`Registry.GetValue(HKCU\...\Explorer\Accent, AccentColorMenu)`** — the
+  swatch shown in Settings > Personalization > Colors, as a `0xAABBGGRR`
+  DWORD. `UISettings.GetColorValue(UIColorType.Accent)` is the documented way
+  to ask, but it needs a Windows-SDK target framework and the C#/WinRT
+  projections; this project has no package references and restores offline, so
+  the registry it is. Note that `HKCU\...\DWM\AccentColor` is *not* the same
+  value — that one is the tint DWM paints on active title bars, and on the
+  development machine it is a completely different hue from the swatch.
+- **`DwmGetColorizationColor`** — the documented fallback, used only when the
+  registry value is missing. It returns the *composed* colour, the accent
+  already blended with the colorization balance, so it lands a shade or two
+  off the swatch.
+- **`WM_DWMCOLORIZATIONCOLORCHANGED`** and **`WM_SETTINGCHANGE`** with
+  `lParam == "ImmersiveColorSet"` — the two announcements Windows broadcasts
+  when the accent changes. Neither is guaranteed on its own, so the controller
+  window listens for both and the colour comparison discards the duplicates;
+  one trip through the colour picker produces several.
+
 ### DPI
 
 - **`SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`**
@@ -100,8 +121,8 @@ bearing rather than decorative: no message loop, no callbacks.
 **Four strips, not one frame-shaped window.** A single overlay covering the
 whole target would need an `UpdateLayeredWindow` bitmap the size of that
 window — roughly 33 MB for a maximized 4K window — plus a same-sized DWM
-redirection surface. Four thin strips share two small solid bitmaps that are
-allocated once and reused for the life of the process, and they leave the
+redirection surface. Four thin strips share two small solid bitmaps, remade
+only when the desktop grows or the accent colour changes, and they leave the
 interior of the target genuinely untouched rather than merely transparent.
 
 **The border is drawn just inside the visible frame, not outside it.**
@@ -140,6 +161,16 @@ instead means the retry continues until the utility is attached to whatever
 actually holds the foreground. `tests\07-late-eligible.ps1` covers this
 exactly, and fails on the older logic.
 
+**The accent colour is re-read for a moment after the announcement, not just
+once.** The broadcast and the registry write are not ordered with respect to
+each other, so a read done straight off the notification can still return the
+old colour. The controller keeps re-reading for ten more timer ticks, which
+costs nothing and removes the race; the overlay and the tray icon each compare
+against the colour they last drew with, so the repeated reads turn into at
+most one repaint. The tray icon rides on the controller's event rather than
+listening for the broadcasts itself, because the controller owns the only
+timer in the process and is therefore the only part that can outlast the race.
+
 **Event-driven first, polling only as a safety net.** The timer idles at
 5 Hz and only steps up to 30 Hz when polling actually catches a change that
 events missed, decaying back afterwards. This matters for elevated windows,
@@ -176,9 +207,16 @@ two-monitor layout whose virtual screen origin is `-1920,0`:
 - Border geometry exactly matches `DWMWA_EXTENDED_FRAME_BOUNDS` on all four
   edges, at the initial position, after a move, after a resize, on the
   monitor at **negative X**, maximized, and restored.
-- Exactly 5 physical pixels of the hazard pattern on each edge, verified by
-  screen capture; the 6th row/column is the application, not the border, so
-  the border is exactly 5 px rather than merely at least 5 px.
+- Each edge is solid accent colour, verified by screen capture against the
+  value in the registry, and each strip window is exactly 5 physical pixels
+  thick. Thickness is read from the strip windows rather than from the pixel
+  one past the border, because with "show accent colour on title bars"
+  switched on that pixel is allowed to be the accent colour too.
+- Changing the accent repaints a **running** instance: writing a new
+  `AccentColorMenu` and broadcasting `WM_SETTINGCHANGE` moves the border to
+  the new colour, and back again, with no restart and still exactly four
+  strips (`tests 8-accent.ps1`, which restores the original accent in a
+  `finally` block).
 - The interior is never painted, and `WindowFromPoint` returns the target -
   never a strip - on all four edges, so clicks pass straight through.
 - Ten consecutive focus alternations between two windows: the border followed
@@ -250,8 +288,8 @@ window that was focused when it started. Do not type during a run.
 
 ## Manual test checklist
 
-1. Start `ActiveBorder.exe`. The focused window gains a red/white hazard
-   stripe.
+1. Start `ActiveBorder.exe`. The focused window gains a border in the accent
+   colour.
 2. Launch an application that is not already running - Windows Terminal is
    the one that used to fail here - and confirm it gets a border straight
    away, without having to click another window and back.
@@ -281,7 +319,10 @@ window that was focused when it started. Do not type during a run.
 18. Right-click the tray icon. A menu appears with "Exit ActiveBorder".
 19. Press Escape, or click somewhere else on the desktop. The menu closes
     rather than staying stuck on screen.
-20. Leave it running and check Task Manager: CPU should read 0%.
-21. Right-click the tray icon and choose "Exit ActiveBorder". All borders
+20. Open Settings > Personalization > Colors and pick a different accent. The
+    border and the tray icon both change colour immediately, without
+    restarting anything.
+21. Leave it running and check Task Manager: CPU should read 0%.
+22. Right-click the tray icon and choose "Exit ActiveBorder". All borders
     vanish immediately, the tray icon disappears without needing a hover to
     clear a ghost, and the process is gone from Task Manager.

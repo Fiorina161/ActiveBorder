@@ -27,6 +27,15 @@ internal sealed class FocusTracker : IDisposable
 	private const int Z_ORDER_COOLDOWN_TICKS = 5;
 	private const int TIMER_ID = 1;
 
+	/**
+	 * How many ticks to keep re-reading the accent colour after Windows has
+	 * announced a colour change. The announcement and the registry write are
+	 * not ordered with respect to each other, so the first read can still
+	 * return the old value; re-reading for a second or two costs nothing and
+	 * removes the race.
+	 */
+	private const int ACCENT_RECHECK_TICKS = 10;
+
 	private readonly OverlayWindow _overlay = new();
 
 	// Delegates handed to Win32 must stay reachable for the lifetime of the
@@ -52,6 +61,7 @@ internal sealed class FocusTracker : IDisposable
 	private uint _timerInterval;
 	private int _fastTicksRemaining;
 	private int _zOrderCooldown;
+	private int _accentRecheckTicks;
 	private bool _disposed;
 
 	internal FocusTracker()
@@ -94,6 +104,19 @@ internal sealed class FocusTracker : IDisposable
 
 	/** Handle callers can post WM_CLOSE to in order to quit. */
 	internal IntPtr MessageWindow => _messageWindow;
+
+	/**
+     * Raised after the accent colour has been re-read, whether or not it
+     * actually moved.
+     *
+     * The tracker is the only part of the utility that owns a timer, and
+     * therefore the only part that can ride out the ordering race between
+     * Windows announcing a colour change and the new value appearing in the
+     * registry. Anything else that follows the accent colour subscribes here
+     * rather than repeating the whole mechanism, and compares against the
+     * colour it last drew with.
+     */
+	internal event Action? AccentColorChanged;
 
 	private static IntPtr Hook(uint min, uint max, WinEventProc callback) => SetWinEventHook(min, max, IntPtr.Zero, callback, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
@@ -290,6 +313,12 @@ internal sealed class FocusTracker : IDisposable
 		if (foreground != _target)
 			AttachTo(foreground);
 
+		if (_accentRecheckTicks > 0)
+		{
+			_accentRecheckTicks--;
+			ApplyAccentColor();
+		}
+
 		if (_target == IntPtr.Zero)
 		{
 			DecayFast();
@@ -321,6 +350,31 @@ internal sealed class FocusTracker : IDisposable
 		{
 			DecayFast();
 		}
+	}
+
+	// ------------------------------------------------------------------
+	// Accent colour
+	// ------------------------------------------------------------------
+
+	/**
+     * Re-read the accent colour and repaint the border if it moved. Cheap
+     * enough to call speculatively: when the colour is unchanged the overlay
+     * does nothing at all.
+     */
+	private void ApplyAccentColor()
+	{
+		AccentColor.Reload();
+
+		if (_overlay.OnAccentColorChanged())
+		{
+			// The strips have new bitmaps but the same geometry, so Refresh
+			// would find nothing to do. Forgetting the last bounds makes it
+			// redraw.
+			_hasBounds = false;
+			Refresh(reassertZOrder: false);
+		}
+
+		AccentColorChanged?.Invoke();
 	}
 
 	private void GoFast()
@@ -363,6 +417,24 @@ internal sealed class FocusTracker : IDisposable
 					OnTick();
 				return IntPtr.Zero;
 
+			// Both of these fire when the user changes the accent colour:
+			// DWM's own notification, and the shell's blanket "immersive
+			// colours changed" broadcast. Neither is guaranteed on its own,
+			// so listen for both and let the colour comparison inside
+			// ApplyAccentColor throw away the duplicates.
+			case WM_DWMCOLORIZATIONCOLORCHANGED:
+				_accentRecheckTicks = ACCENT_RECHECK_TICKS;
+				ApplyAccentColor();
+				return IntPtr.Zero;
+
+			case WM_SETTINGCHANGE:
+				if (IsImmersiveColorSet(lParam))
+				{
+					_accentRecheckTicks = ACCENT_RECHECK_TICKS;
+					ApplyAccentColor();
+				}
+				return IntPtr.Zero;
+
 			case WM_DISPLAYCHANGE:
 				_overlay.OnDisplayChanged();
 				_hasBounds = false;
@@ -379,6 +451,13 @@ internal sealed class FocusTracker : IDisposable
 		}
 		return DefWindowProcW(hwnd, msg, wParam, lParam);
 	}
+
+	/**
+     * WM_SETTINGCHANGE is a firehose - it arrives for environment variables,
+     * policy, locale and much else - so the section name in lParam is what
+     * separates a colour change from the rest.
+     */
+	private static bool IsImmersiveColorSet(IntPtr lParam) => lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet";
 
 	public void Dispose()
 	{

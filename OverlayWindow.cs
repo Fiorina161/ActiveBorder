@@ -12,17 +12,18 @@ namespace ActiveBorder;
  * covering the whole target would need an UpdateLayeredWindow bitmap the size
  * of that window (~33 MB for a maximized 4K window) and a same-sized DWM
  * redirection surface. Four strips only ever need two small solid bitmaps,
- * reused for the lifetime of the process, and they leave the interior of the
- * target completely untouched rather than merely transparent.
+ * reused until the accent colour or the desktop size changes, and they leave
+ * the interior of the target completely untouched rather than merely
+ * transparent.
  */
 internal sealed class OverlayWindow : IDisposable
 {
 	/**
-	 * Length of one first-colour plus one second-colour band measured along
-	 * an edge, in physical pixels. The bands run at 45 degrees, so the width
-	 * you actually see across a band is about 0.35 of this.
+	 * Border thickness in physical pixels. Fixed rather than configurable:
+	 * the process is per-monitor-v2 DPI aware, so this is five real pixels
+	 * on every monitor whatever its scaling.
 	 */
-	private const int STRIPE_PERIOD = 12;
+	internal const int WIDTH = 5;
 
 	private const string CLASS_NAME = "ActiveBorderOverlay";
 
@@ -42,10 +43,14 @@ internal sealed class OverlayWindow : IDisposable
 	// Two solid-colour DIB sections, each permanently selected into its own
 	// memory DC: one long-and-short for the horizontal edges, one
 	// short-and-tall for the vertical edges. UpdateLayeredWindow is happy to
-	// take a source bitmap larger than the destination window.
+	// take a source bitmap larger than the destination window. They are only
+	// rebuilt when the desktop grows or the accent colour changes.
 	private IntPtr _horizontalDc, _horizontalBitmap, _horizontalOldBitmap;
 	private IntPtr _verticalDc, _verticalBitmap, _verticalOldBitmap;
 	private int _stripLength;
+
+	// The accent colour the bitmaps above were filled with.
+	private uint _color;
 
 	private bool _visible;
 	private bool _topmost;
@@ -92,7 +97,7 @@ internal sealed class OverlayWindow : IDisposable
 	{
 		// A window narrower or shorter than two borders has nowhere sensible
 		// to put a rectangle.
-		if (bounds.Width < Settings.Width * 2 || bounds.Height < Settings.Width * 2)
+		if (bounds.Width < WIDTH * 2 || bounds.Height < WIDTH * 2)
 		{
 			Hide();
 			return;
@@ -102,10 +107,10 @@ internal sealed class OverlayWindow : IDisposable
 		// outside it. Outside would fall off the screen (or under the
 		// taskbar) for maximized and snapped windows, which is exactly where
 		// a focus indicator is most needed.
-		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + Settings.Width);
-		var bottom = Rect(bounds.Left, bounds.Bottom - Settings.Width, bounds.Right, bounds.Bottom);
-		var left = Rect(bounds.Left, bounds.Top + Settings.Width, bounds.Left + Settings.Width, bounds.Bottom - Settings.Width);
-		var right = Rect(bounds.Right - Settings.Width, bounds.Top + Settings.Width, bounds.Right, bounds.Bottom - Settings.Width);
+		var top = Rect(bounds.Left, bounds.Top, bounds.Right, bounds.Top + WIDTH);
+		var bottom = Rect(bounds.Left, bounds.Bottom - WIDTH, bounds.Right, bounds.Bottom);
+		var left = Rect(bounds.Left, bounds.Top + WIDTH, bounds.Left + WIDTH, bounds.Bottom - WIDTH);
+		var right = Rect(bounds.Right - WIDTH, bounds.Top + WIDTH, bounds.Right, bounds.Bottom - WIDTH);
 
 		_bounds = bounds;
 
@@ -188,8 +193,8 @@ internal sealed class OverlayWindow : IDisposable
 
 		// Guard against a window somehow larger than the bitmaps we sized to
 		// the virtual screen; clamping is better than a failed draw.
-		var width = Math.Min(rect.Width, horizontal ? _stripLength : Settings.Width);
-		var height = Math.Min(rect.Height, horizontal ? Settings.Width : _stripLength);
+		var width = Math.Min(rect.Width, horizontal ? _stripLength : WIDTH);
+		var height = Math.Min(rect.Height, horizontal ? WIDTH : _stripLength);
 		if (width <= 0 || height <= 0)
 			return;
 
@@ -200,14 +205,9 @@ internal sealed class OverlayWindow : IDisposable
 
 		var destination = new POINT(rect.Left, rect.Top);
 		var size = new SIZE(width, height);
-		// Anchor the pattern to screen coordinates so the diagonals run
-		// continuously around all four edges instead of each restarting at
-		// its own corner. The source pixel under screen (x, y) must satisfy
-		// (offset + i) + j == (x + i) + (y + j), so the offset is x + y
-		// reduced modulo the period. The double modulo keeps it positive on
-		// a monitor left of the primary, where the coordinates go negative.
-		var phase = (((rect.Left + rect.Top) % STRIPE_PERIOD) + STRIPE_PERIOD) % STRIPE_PERIOD;
-		var source = horizontal ? new POINT(phase, 0) : new POINT(0, phase);
+		// The bitmaps are one flat colour, so any origin would do; take the
+		// first pixel.
+		var source = new POINT(0, 0);
 		var blend = new BLENDFUNCTION
 		{
 			BlendOp = AC_SRC_OVER,
@@ -314,6 +314,31 @@ internal sealed class OverlayWindow : IDisposable
 		if (RequiredStripLength() <= _stripLength)
 			return;
 
+		Rebuild();
+	}
+
+	/**
+     * Rebuild the strip bitmaps in the current accent colour. Returns true
+     * only when the colour had actually changed, so the caller redraws for a
+     * real change and ignores the several notifications Windows sends for
+     * one trip through the colour picker.
+     */
+	internal bool OnAccentColorChanged()
+	{
+		if (AccentColor.Current == _color)
+			return false;
+
+		Rebuild();
+		return true;
+	}
+
+	/**
+     * Discard the bitmaps and make them again. Clearing the cached edge
+     * rectangles is what forces UpdateEdge to actually repaint: it otherwise
+     * skips an edge whose geometry has not moved.
+     */
+	private void Rebuild()
+	{
 		Array.Clear(_edgeRects);
 		DestroyStripBitmaps();
 		CreateStripBitmaps();
@@ -331,19 +356,18 @@ internal sealed class OverlayWindow : IDisposable
 	private void CreateStripBitmaps()
 	{
 		_stripLength = RequiredStripLength();
+		_color = AccentColor.Current;
 
 		_horizontalDc = CreateCompatibleDC(IntPtr.Zero);
-		// The extra period is headroom for the phase offset that anchors the
-		// pattern to screen coordinates; see UpdateEdge.
-		_horizontalBitmap = CreateStripeDib(_stripLength + STRIPE_PERIOD, Settings.Width);
+		_horizontalBitmap = CreateSolidDib(_stripLength, WIDTH, _color);
 		_horizontalOldBitmap = SelectObject(_horizontalDc, _horizontalBitmap);
 
 		_verticalDc = CreateCompatibleDC(IntPtr.Zero);
-		_verticalBitmap = CreateStripeDib(Settings.Width, _stripLength + STRIPE_PERIOD);
+		_verticalBitmap = CreateSolidDib(WIDTH, _stripLength, _color);
 		_verticalOldBitmap = SelectObject(_verticalDc, _verticalBitmap);
 	}
 
-	private static IntPtr CreateStripeDib(int width, int height)
+	private static IntPtr CreateSolidDib(int width, int height, uint color)
 	{
 		var header = new BITMAPINFOHEADER
 		{
@@ -363,16 +387,7 @@ internal sealed class OverlayWindow : IDisposable
 
 		var pixelCount = width * height;
 		var pixels = new int[pixelCount];
-		var first = unchecked((int)Settings.Color1);
-		var second = unchecked((int)Settings.Color2);
-
-		// Pixels sharing a value of x + y lie on a 45 degree line, so
-		// thresholding that sum inside one period gives diagonal bands
-		// leaning the way a forward slash does.
-		for (var y = 0; y < height; y++)
-			for (var x = 0; x < width; x++)
-				pixels[(y * width) + x] = (x + y) % STRIPE_PERIOD < STRIPE_PERIOD / 2 ? first : second;
-
+		Array.Fill(pixels, unchecked((int)color));
 		Marshal.Copy(pixels, 0, bits, pixelCount);
 
 		return bitmap;

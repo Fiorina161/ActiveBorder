@@ -1,7 +1,7 @@
 # ActiveBorder
 
-A tiny Windows 11 utility that draws a red and white hazard stripe around
-whichever window currently has keyboard focus.
+A tiny Windows 11 utility that draws a border in your Windows accent colour
+around whichever window currently has keyboard focus.
 
 It lives in the system tray, needs no configuration, and costs effectively
 nothing to leave running.
@@ -20,9 +20,10 @@ application to draw anything.
 
 ## What it does
 
-- Draws a **5-pixel hazard stripe** just inside the edge of the focused
-  window: red `#FF0000` and white `#FFFFFF` bands at 45 degrees, like the
-  markings on a warning panel.
+- Draws a solid **5-pixel border** just inside the edge of the focused
+  window, in the accent colour from Settings > Personalization > Colors.
+- **Follows the accent colour live.** Change it and the border on screen
+  changes with it, with no restart.
 - Follows that window as it moves, resizes, snaps, maximizes, restores and
   crosses between monitors.
 - Moves to the new window the moment focus changes, and disappears when you
@@ -73,8 +74,9 @@ That is the whole setup. No installer, no first-run wizard, no settings file.
 Focus a window and it gets an outline.
 
 The utility has **no window and no taskbar button**. It is built as a `WinExe`
-and lives entirely in the notification area. Its icon is a small hollow red
-square - solid rather than striped, because stripes do not resolve at 16x16.
+and lives entirely in the notification area. Its icon is a small hollow square
+in the accent colour, redrawn along with the border whenever that colour
+changes.
 
 ### Finding the tray icon
 
@@ -101,64 +103,32 @@ Not built in, deliberately. If you want it, put a shortcut to
 `ActiveBorder.exe` in your Startup folder - press Win+R and enter
 `shell:startup`.
 
-## Changing the colour or thickness
+## The colour
 
-Three environment variables, read once when the utility starts. No rebuild,
-no settings file:
+There is nothing to configure. The border is drawn in your **Windows accent
+colour** - Settings > Personalization > Colors > "Accent color" - and so is
+the tray icon, so the two always match.
 
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `AB_COLOR_1` | first stripe colour, `RRGGBB` | `FF0000` red |
-| `AB_COLOR_2` | second stripe colour, `RRGGBB` | `FFFFFF` white |
-| `AB_WIDTH` | border thickness in physical pixels, 1 to 64 | `5` |
+Changing the accent updates a running instance **live**: pick a new colour, or
+let the automatic wallpaper-derived accent move, and the border on screen
+follows within a fraction of a second. Nothing needs restarting.
 
-```powershell
-$env:AB_COLOR_1 = "00A0FF"
-$env:AB_COLOR_2  = "202020"
-$env:AB_WIDTH   = "9"
-.\bin\Release\net8.0-windows\ActiveBorder.exe
-```
+The value read is
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent\AccentColorMenu`,
+which is the swatch Settings shows rather than the slightly different tint DWM
+paints on active title bars. If it cannot be read at all, the utility falls
+back to `DwmGetColorizationColor`, and then to Windows' own default blue
+`#0078D4`.
 
-To make them stick, set them for your account once and they apply to every
-later run:
-
-```powershell
-[Environment]::SetEnvironmentVariable("AB_COLOR_1", "00A0FF", "User")
-```
-
-A leading `#` is accepted, so `#00A0FF` works as well as `00A0FF`.
-
-**Anything missing, malformed or out of range falls back to its default**
-rather than failing. A tray utility with no console has nowhere to report a
-bad value, and refusing to start over one typo would be worse than ignoring
-it. `AB_WIDTH=wide`, `AB_WIDTH=999` and `AB_COLOR_1=nothex` all just leave
-that one setting at its default; the others still apply.
-
-The values are fixed for the lifetime of the process: the strip bitmaps are
-rendered once at start-up, so a change takes effect the next time you run it.
-
-The tray icon uses `AB_COLOR_1`, so it always matches the border.
-
-`AB_WIDTH` is in *physical* pixels. The process is per-monitor-v2 DPI aware,
-so the system does not scale it: 5 means 5 real pixels on every monitor. The
-upper limit of 64 exists because the strips are as long as the virtual
-screen, so their bitmaps grow with the thickness.
-
-At the default 5 px the stripe reads as a fine diagonal hatch. For something
-closer to real hazard tape, try `AB_WIDTH=12`.
-
-One thing that is still a compile-time constant, in
+Thickness is a compile-time constant, in
 [`OverlayWindow.cs`](OverlayWindow.cs):
 
 ```csharp
-private const int STRIPE_PERIOD = 12;   // one first-colour + one second-colour band
+internal const int WIDTH = 5;
 ```
 
-It is the length of one full band pair measured along an edge. The bands run
-at 45 degrees, so the width you see across a band is about 0.35 of it. The
-pattern is anchored to screen coordinates rather than to each strip, so the
-diagonals run continuously around all four corners instead of restarting at
-each one.
+It is in *physical* pixels. The process is per-monitor-v2 DPI aware, so the
+system does not scale it: 5 means 5 real pixels on every monitor.
 
 ## Tested against
 
@@ -219,8 +189,8 @@ framework - just Win32, GDI and DWM through P/Invoke.
 ## Tests
 
 Eight PowerShell suites cover geometry, colour, click-through, z-order, CPU,
-the tray icon, attaching to newly created windows, and the environment
-overrides. Build first, then:
+the tray icon, attaching to newly created windows, and following the accent
+colour live. Build first, then:
 
 ```
 pwsh -NoProfile -File tests\01-geometry.ps1
@@ -242,7 +212,8 @@ and focus their own windows, so do not type while one is running.
   hooks receiving events from higher-integrity processes, so those windows are
   tracked by polling until the adaptive timer speeds up.
 - No configuration UI, hotkeys, per-application colours or auto-start. The
-  tray menu has exactly one item.
+  tray menu has exactly one item, and the colour is whatever Windows says the
+  accent is.
 
 ## License
 

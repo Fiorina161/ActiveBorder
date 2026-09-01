@@ -30,10 +30,12 @@ internal static class NativeMethods
 	internal const int WM_DESTROY = 0x0002;
 	internal const int WM_CLOSE = 0x0010;
 	internal const int WM_ERASEBKGND = 0x0014;
+	internal const int WM_SETTINGCHANGE = 0x001A;
 	internal const int WM_MOUSEACTIVATE = 0x0021;
 	internal const int WM_DISPLAYCHANGE = 0x007E;
 	internal const int WM_NCHITTEST = 0x0084;
 	internal const int WM_TIMER = 0x0113;
+	internal const int WM_DWMCOLORIZATIONCOLORCHANGED = 0x0320;
 
 	internal const int WM_COMMAND = 0x0111;
 	internal const int WM_NULL = 0x0000;
@@ -47,6 +49,7 @@ internal static class NativeMethods
 	// Notification area (tray)
 	// ------------------------------------------------------------------
 	internal const uint NIM_ADD = 0x00000000;
+	internal const uint NIM_MODIFY = 0x00000001;
 	internal const uint NIM_DELETE = 0x00000002;
 
 	internal const uint NIF_MESSAGE = 0x00000001;
@@ -411,6 +414,9 @@ internal static class NativeMethods
 
 	[DllImport("dwmapi.dll")]
 	internal static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+	[DllImport("dwmapi.dll")]
+	internal static extern int DwmGetColorizationColor(out uint colorization, out bool opaqueBlend);
 
 	// ------------------------------------------------------------------
 	// shell32
